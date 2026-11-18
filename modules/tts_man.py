@@ -70,7 +70,7 @@ def blueboxtts(text, lang, *, zczc=None):
     binary = dave_executable()
 
     if zczc:
-        text = f"{E2T(zczc, 'SAGE')} {text}".strip()
+        text = f"{E2T(zczc, 'SAGE').replace(' ()', '.')} {text}".strip()
     log.info('Sage Digital (%s) text: %r', lang, text)
 
     # dave reads Latin-1. pipe the WAV back so concurrent alerts need no temp file.
