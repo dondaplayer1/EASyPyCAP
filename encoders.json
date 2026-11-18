@@ -1,0 +1,50 @@
+{
+    "encoders": {
+        "DNT EASyPLUS": {
+            "enabled": true,
+            "ip": "10.200.0.200",
+            "command_port": "59911",
+            "audio_port": "59919",
+            "password": "Administrator",
+            "counties": [
+                "026073",
+                "026000"
+            ],
+            "events": [
+                "RWT",
+                "RMT",
+                "ADR",
+                "CAE",
+                "CDW",
+                "CEM",
+                "DMO",
+                "EQW",
+                "EVI",
+                "HMW",
+                "LAE",
+                "LEW",
+                "NIC",
+                "NMN",
+                "NPT",
+                "NUW",
+                "RHW",
+                "SPW",
+                "TOE",
+                "VOW"
+            ]
+        },
+        "Test EASyPLUS": {
+            "enabled": false,
+            "ip": "10.20.30.40",
+            "command_port": "59911",
+            "audio_port": "59919",
+            "password": "Administrator",
+            "counties": [
+                "*"
+            ],
+            "events": [
+                "*"
+            ]
+        }
+    }
+}

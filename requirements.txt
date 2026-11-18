@@ -1,0 +1,1 @@
+gTTS>=2.5    # only needed when config.json has "tts": "gtts"
