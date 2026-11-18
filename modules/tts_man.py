@@ -1,6 +1,7 @@
 """Generate alert audio with the configured TTS engine."""
 import io
 import json
+import logging
 import platform
 import subprocess
 import sys
@@ -12,6 +13,7 @@ from e2t_ng.python.EAS2Text_NG import E2T as E2T
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / 'config.json'
+log = logging.getLogger('TTS')
 
 
 class TTSError(Exception):
@@ -27,6 +29,7 @@ def gtts_audio(text, lang, *, zczc=None):
     voice = 'es' if lang == 'es-us' else 'en'
     if zczc:
         text = f"{E2T(zczc, 'TRILITHIC8PLUS')} {text}".strip()
+    log.info('gTTS (%s) text: %r', lang, text)
     gTTS(text, lang=voice).write_to_fp(mp3)
     return mp3.getvalue()
 
@@ -68,6 +71,7 @@ def blueboxtts(text, lang, *, zczc=None):
 
     if zczc:
         text = f"{E2T(zczc, 'SAGE')} {text}".strip()
+    log.info('Sage Digital (%s) text: %r', lang, text)
 
     # dave reads Latin-1. pipe the WAV back so concurrent alerts need no temp file.
     try:
