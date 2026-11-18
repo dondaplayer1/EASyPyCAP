@@ -6,10 +6,11 @@
                 "poll_dur": 15,
                 "url": "https://apps.fema.gov/IPAWSOPEN_EAS_SERVICE/rest/feed"
             },
-            "IPAWS TDL": {
+            "examplewithpin": {
                 "enabled": false,
-                "poll_dur": 30,
-                "url": "https://tdl.apps.fema.gov/IPAWSOPEN_EAS_SERVICE/rest/feed"
+                "poll_dur": 15,
+                "pin": "12345678",
+                "url": "https://cap.example.com/IPAWSOPEN_EAS_SERVICE/rest/feed"
             }
         }
     }

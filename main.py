@@ -91,6 +91,7 @@ class Relay:
         self.encoders = {name: enc for name, enc in encoders.items() if enc.get('enabled', True)}
         self.dry_run = dry_run
         self.config_path = config_path
+        self.source_openers = {}
         self.sent = set()
         self.lock = threading.Lock()
         self.encoder_locks = {name: threading.Lock() for name in self.encoders}
@@ -133,20 +134,20 @@ class Relay:
 
         if not targets:
             return
-        audio = self.get_audio(alert)
+        audio = self.get_audio(alert, self.source_openers.get(source))
         for name, encoder in targets:
             self.send(name, encoder, alert, audio)
 
-    def get_audio(self, alert):
+    def get_audio(self, alert, open_request=None):
         audio = {}
         for lang, info in alert.get('languages', {}).items():
-            audio[lang] = self.ipaws_audio(lang, info) or self.tts_audio(lang, info)
+            audio[lang] = self.ipaws_audio(lang, info, open_request) or self.tts_audio(lang, info)
         return audio
 
-    def ipaws_audio(self, lang, info):
+    def ipaws_audio(self, lang, info, open_request=None):
         for resource in info.get('audio', []):
             try:
-                audio = to_audio(resource_bytes(resource))
+                audio = to_audio(resource_bytes(resource, open_request=open_request))
             except AudioError as error:
                 log.warning(f'IPAWS audio ({lang}) unusable: {error}')
                 continue
@@ -220,7 +221,12 @@ def main():
     pollers = []
     for name, source in sources.get('ipaws', {}).items():
         if source.get('enabled', True):
-            poller = IpawsPoller(name, source['url'], source.get('poll_dur', 60), relay.on_alert, stop_event)
+            poller = IpawsPoller(
+                name, source['url'], source.get('poll_dur', 60), relay.on_alert, stop_event,
+                pin=source.get('pin'),
+            )
+            if poller.pin_opener:
+                relay.source_openers[name] = poller.pin_opener.open
             pollers.append(poller)
     if not pollers:
         log.error('No enabled sources in sources.json')

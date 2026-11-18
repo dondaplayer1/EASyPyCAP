@@ -50,7 +50,7 @@ def ffmpeg_convert(data):
     return result.stdout
 
 
-def resource_bytes(resource, timeout=30):
+def resource_bytes(resource, timeout=30, *, open_request=None):
     embedded = resource.get('deref')
     if embedded:
         try:
@@ -65,7 +65,8 @@ def resource_bytes(resource, timeout=30):
 
     try:
         request = urllib.request.Request(uri, headers={'User-Agent': 'EASyPyCAP'})
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        open_request = open_request or urllib.request.urlopen
+        with open_request(request, timeout=timeout) as response:
             data = response.read(MAX_DOWNLOAD_BYTES + 1)
     except OSError as error:
         raise AudioError(f'Could not download {uri}: {error}') from error
