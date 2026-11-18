@@ -1,6 +1,4 @@
-# gets IPAWS and TTS audio into what the EASyPLUS takes: 8kHz mono 16-bit PCM, 2 minutes max.
-# anything not already in that format goes through ffmpeg, so it needs to be on PATH.
-
+"""Convert IPAWS and TTS audio to 8 kHz mono PCM."""
 import base64
 import io
 import shutil
@@ -8,7 +6,10 @@ import subprocess
 import urllib.request
 import wave
 
-from easyplus_protocol import AUDIO_LIMIT_FRAMES, Audio
+from easyplus_protocol import AUDIO_LIMIT_FRAMES, FRAMES_PER_SECOND, Audio
+
+SAMPLE_WIDTH = 2
+MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024
 
 
 class AudioError(Exception):
@@ -16,11 +17,12 @@ class AudioError(Exception):
 
 
 def to_audio(data):
-    # if it's already an 8kHz mono 16-bit wav we can skip ffmpeg
     try:
         with wave.open(io.BytesIO(data), 'rb') as wav:
-            if wav.getnchannels() == 1 and wav.getsampwidth() == 2 and wav.getframerate() == 8000:
-                return Audio(wav.readframes(min(wav.getnframes(), AUDIO_LIMIT_FRAMES)))
+            wav_format = wav.getnchannels(), wav.getsampwidth(), wav.getframerate()
+            if wav_format == (1, SAMPLE_WIDTH, FRAMES_PER_SECOND):
+                frames = min(wav.getnframes(), AUDIO_LIMIT_FRAMES)
+                return Audio(wav.readframes(frames))
     except (wave.Error, EOFError):
         pass
     return Audio(ffmpeg_convert(data))
@@ -31,11 +33,14 @@ def ffmpeg_convert(data):
     if not ffmpeg:
         raise AudioError('ffmpeg is not installed or not on PATH, cannot convert audio')
 
-    # -t 120 cuts it off at the encoder's 2 minute limit
-    cmd = [ffmpeg, '-loglevel', 'error', '-i', 'pipe:0', '-t', '120',
-           '-ac', '1', '-ar', '8000', '-f', 's16le', 'pipe:1']
+    limit_seconds = AUDIO_LIMIT_FRAMES // FRAMES_PER_SECOND
+    command = [
+        ffmpeg, '-loglevel', 'error', '-i', 'pipe:0',
+        '-t', str(limit_seconds), '-ac', '1', '-ar', str(FRAMES_PER_SECOND),
+        '-f', 's16le', 'pipe:1',
+    ]
     try:
-        result = subprocess.run(cmd, input=data, capture_output=True, timeout=60)
+        result = subprocess.run(command, input=data, capture_output=True, timeout=60)
     except subprocess.TimeoutExpired:
         raise AudioError('ffmpeg timed out')
 
@@ -46,28 +51,28 @@ def ffmpeg_convert(data):
 
 
 def resource_bytes(resource, timeout=30):
-    # CAP audio is either base64'd right in the alert (derefUri) or linked (uri)
-    if resource.get('deref'):
+    embedded = resource.get('deref')
+    if embedded:
         try:
-            return base64.b64decode(resource['deref'])
-        except ValueError as e:
-            raise AudioError(f'Bad embedded audio: {e}')
+            return base64.b64decode(embedded)
+        except ValueError as error:
+            raise AudioError(f'Bad embedded audio: {error}') from error
 
     uri = resource.get('uri', '')
-    # only follow web links, don't want a CAP pointing us at file:// on this machine
+    # CAP resources are fetched over HTTP(S) only.
     if not uri.lower().startswith(('http://', 'https://')):
         raise AudioError(f'Unsupported audio URI: {uri[:80]!r}')
 
     try:
-        req = urllib.request.Request(uri, headers={'User-Agent': 'EASyPyCAP'})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = r.read(20 * 1024 * 1024 + 1)
-    except OSError as e:
-        raise AudioError(f'Could not download {uri}: {e}')
-    if len(data) > 20 * 1024 * 1024:
+        request = urllib.request.Request(uri, headers={'User-Agent': 'EASyPyCAP'})
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            data = response.read(MAX_DOWNLOAD_BYTES + 1)
+    except OSError as error:
+        raise AudioError(f'Could not download {uri}: {error}') from error
+    if len(data) > MAX_DOWNLOAD_BYTES:
         raise AudioError(f'Audio at {uri} is over 20 MB, skipping')
     return data
 
 
 def seconds(audio):
-    return len(audio.pcm) / 2 / 8000
+    return len(audio.pcm) / SAMPLE_WIDTH / FRAMES_PER_SECOND

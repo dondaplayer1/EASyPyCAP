@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""EASyPyCAP - polls IPAWS and relays alerts to any EASyPLUS that's subscribed to them.
-
-    python main.py             run until Ctrl+C
-    python main.py --dry-run   log what would be sent without touching the encoders
-"""
+"""Relay IPAWS alerts to subscribed EASyPLUS encoders."""
 import argparse
 import json
 import logging
@@ -25,36 +21,30 @@ from ipaws import IpawsPoller
 
 log = logging.getLogger('MAIN')
 
-ALERT = 25  # custom level so incoming alerts stand out
+ALERT = 25
 logging.addLevelName(ALERT, 'ALERT')
 
 
 class ColorFormatter(logging.Formatter):
-    grey = '\x1b[90m'
-    green = '\x1b[92m'
-    magenta = '\x1b[95m'
-    yellow = '\x1b[93m'
-    red = '\x1b[91m'
-    reset = '\x1b[0m'
-
-    format_str = '%(asctime)s | %(levelname)-8s | [%(name)s] %(message)s'
-
-    FORMATS = {
-        logging.DEBUG: grey + format_str + reset,
-        logging.INFO: green + format_str + reset,
-        ALERT: magenta + format_str + reset,
-        logging.WARNING: yellow + format_str + reset,
-        logging.ERROR: red + format_str + reset,
-        logging.CRITICAL: red + format_str + reset,
+    COLORS = {
+        logging.DEBUG: '\x1b[90m',
+        logging.INFO: '\x1b[92m',
+        ALERT: '\x1b[95m',
+        logging.WARNING: '\x1b[93m',
+        logging.ERROR: '\x1b[91m',
+        logging.CRITICAL: '\x1b[91m',
     }
 
     def __init__(self, color=True):
-        super().__init__()
+        super().__init__('%(asctime)s | %(levelname)-8s | [%(name)s] %(message)s', '%H:%M:%S')
         self.color = color
 
     def format(self, record):
-        fmt = self.FORMATS.get(record.levelno) if self.color else self.format_str
-        return logging.Formatter(fmt, '%H:%M:%S').format(record)
+        message = super().format(record)
+        color = self.COLORS.get(record.levelno) if self.color else None
+        if color:
+            return f'{color}{message}\x1b[0m'
+        return message
 
 
 def setup_logging():
@@ -70,8 +60,8 @@ def load_json(config_dir, name, required=True):
     path = Path(config_dir) / name
     if not required and not path.exists():
         return {}
-    with open(path, encoding='utf-8-sig') as f:
-        return json.load(f)
+    with path.open(encoding='utf-8-sig') as config_file:
+        return json.load(config_file)
 
 
 def zone_matches(zone, location):
@@ -89,8 +79,8 @@ def encoder_wants(encoder, alert):
     if '*' not in events and alert['event_code'] not in events:
         return False
     for zone in encoder.get('counties', ['*']):
-        for loc in alert['locations']:
-            if zone_matches(zone, loc):
+        for location in alert['locations']:
+            if zone_matches(zone, location):
                 return True
     return False
 
@@ -101,16 +91,18 @@ class Relay:
         self.encoders = {name: enc for name, enc in encoders.items() if enc.get('enabled', True)}
         self.dry_run = dry_run
         self.config_path = config_path
-        self.sent = set()  # (encoder, alert id) pairs, so nothing goes out twice
+        self.sent = set()
         self.lock = threading.Lock()
         self.encoder_locks = {name: threading.Lock() for name in self.encoders}
 
     def on_alert(self, source, alert):
-        # runs on the poller thread for every new alert
-        log.log(ALERT, f'{alert["event_code"] or "???"} {alert.get("event", "")} - '
-                       f'{alert.get("area_desc", "")} [{source}, {alert.get("cap_status")}]')
+        event_code = alert["event_code"] or "???"
+        event = alert.get("event", "")
+        area = alert.get("area_desc", "")
+        status = alert.get("cap_status")
+        log.log(ALERT, f'{event_code} {event} - {area} [{source}, {status}]')
 
-        if alert.get('cap_status') != 'Actual':
+        if status != 'Actual':
             log.info('Not an Actual alert, skipping')
             return
         if 'EAS' in alert.get('block_channels', []):
@@ -120,8 +112,8 @@ class Relay:
             if parse_time(alert['expires']) <= datetime.now(timezone.utc):
                 log.info('Already expired, skipping')
                 return
-        except ValueError as e:
-            log.warning(f'Bad expiry time: {e}')
+        except ValueError as error:
+            log.warning(f'Bad expiry time: {error}')
             return
 
         alert_id = (alert.get('sender'), alert.get('identifier'), alert.get('sent'))
@@ -130,22 +122,22 @@ class Relay:
             if not encoder_wants(encoder, alert):
                 log.info(f'{name}: not subscribed')
                 continue
+            send_key = (name, alert_id)
             with self.lock:
-                if (name, alert_id) in self.sent:
+                if send_key in self.sent:
                     log.info(f'{name}: already sent')
                     continue
-                self.sent.add((name, alert_id))
+                # Reserve the delivery before another feed can pick it up.
+                self.sent.add(send_key)
             targets.append((name, encoder))
 
         if not targets:
             return
-        # only bother getting audio if someone's actually getting the alert
         audio = self.get_audio(alert)
         for name, encoder in targets:
             self.send(name, encoder, alert, audio)
 
     def get_audio(self, alert):
-        # IPAWS audio if the CAP has it, otherwise TTS, otherwise nothing
         audio = {}
         for lang, info in alert.get('languages', {}).items():
             audio[lang] = self.ipaws_audio(lang, info) or self.tts_audio(lang, info)
@@ -155,8 +147,8 @@ class Relay:
         for resource in info.get('audio', []):
             try:
                 audio = to_audio(resource_bytes(resource))
-            except AudioError as e:
-                log.warning(f'IPAWS audio ({lang}) unusable: {e}')
+            except AudioError as error:
+                log.warning(f'IPAWS audio ({lang}) unusable: {error}')
                 continue
             log.info(f'Using IPAWS audio ({lang}, {seconds(audio):.1f}s)')
             return audio
@@ -165,37 +157,40 @@ class Relay:
     def tts_audio(self, lang, info):
         try:
             audio = tts_man.synthesize(info.get('alert_text', ''), lang, self.config_path)
-        except tts_man.TTSError as e:
-            log.warning(f'TTS ({lang}) failed: {e}, sending without audio')
+        except tts_man.TTSError as error:
+            log.warning(f'TTS ({lang}) failed: {error}, sending without audio')
             return None
         if audio:
             log.info(f'Generated TTS audio ({lang}, {seconds(audio):.1f}s)')
         return audio
 
     def send(self, name, encoder, alert_data, audio):
-        elog = logging.getLogger(name)
+        encoder_log = logging.getLogger(name)
         try:
             alert = prepare_alert(alert_data, self.callsign, audio.get('en-us'), audio.get('es-us'))
-        except (ValueError, KeyError) as e:
-            elog.error(f'Cannot build alert: {e}')
+        except (ValueError, KeyError) as error:
+            encoder_log.error(f'Cannot build alert: {error}')
             return
 
         langs = ', '.join(lang for lang, a in audio.items() if a) or 'none'
         if self.dry_run:
-            elog.info(f'[dry run] would send {alert.fsk_header} (audio: {langs})')
+            encoder_log.info(f'[dry run] would send {alert.fsk_header} (audio: {langs})')
             return
 
-        elog.info(f'Sending {alert.fsk_header} (audio: {langs})')
-        client = EasyPlusClient(encoder['ip'], encoder['password'],
-                                int(encoder.get('command_port', 59911)), int(encoder.get('audio_port', 59919)))
+        encoder_log.info(f'Sending {alert.fsk_header} (audio: {langs})')
+        client = EasyPlusClient(
+            encoder['ip'], encoder['password'],
+            cmd_port=int(encoder.get('command_port', 59911)),
+            audio_port=int(encoder.get('audio_port', 59919)),
+        )
         try:
-            with self.encoder_locks[name]:  # one delivery per encoder at a time
+            with self.encoder_locks[name]:
                 client.deliver(alert)
-        except (OSError, ProtocolError, ValueError) as e:
-            # no retry here, if the encoder already took it a retry could double-air it
-            elog.error(f'Delivery failed: {e}')
+        except (OSError, ProtocolError, ValueError) as error:
+            # A retry could air the alert twice if the encoder already accepted it.
+            encoder_log.error(f'Delivery failed: {error}')
             return
-        elog.info(f'Encoder accepted {alert_data["event_code"]}')
+        encoder_log.info(f'Encoder accepted {alert_data["event_code"]}')
 
 
 def main():
@@ -221,25 +216,26 @@ def main():
     if args.dry_run:
         log.warning('Dry run, encoder send disabled')
 
-    stop = threading.Event()
+    stop_event = threading.Event()
     pollers = []
-    for name, src in sources.get('ipaws', {}).items():
-        if src.get('enabled', True):
-            pollers.append(IpawsPoller(name, src['url'], src.get('poll_dur', 60), relay.on_alert, stop))
+    for name, source in sources.get('ipaws', {}).items():
+        if source.get('enabled', True):
+            poller = IpawsPoller(name, source['url'], source.get('poll_dur', 60), relay.on_alert, stop_event)
+            pollers.append(poller)
     if not pollers:
         log.error('No enabled sources in sources.json')
         return 1
-    for p in pollers:
-        p.start()
+    for poller in pollers:
+        poller.start()
 
     try:
-        while any(p.is_alive() for p in pollers):
-            stop.wait(1)
+        while any(poller.is_alive() for poller in pollers):
+            stop_event.wait(1)
     except KeyboardInterrupt:
         log.info('Stopping...')
-        stop.set()
-        for p in pollers:
-            p.join(5)
+        stop_event.set()
+        for poller in pollers:
+            poller.join(5)
     return 0
 
 

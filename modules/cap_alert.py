@@ -1,4 +1,4 @@
-"""Parse CAP XML into an alert dict, and turn alert dicts into EASyPLUS alerts."""
+"""Read CAP XML and build SAME headers for EASyPLUS."""
 import math
 import re
 import unicodedata
@@ -13,31 +13,29 @@ ORIGINATORS = ['EAS', 'WXR', 'CIV', 'PEP']
 
 
 class NotDeliverable(ValueError):
-    # valid CAP that just isn't something to air (Cancel, Ack, Error)
-    pass
+    """A CAP message that cannot be aired, such as Cancel, Ack, or Error."""
 
 
 def parse_time(value):
-    t = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
-    if t.tzinfo is None:
+    timestamp = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    if timestamp.tzinfo is None:
         raise ValueError('sent/expires must include a UTC offset or Z')
-    return t.astimezone(timezone.utc)
+    return timestamp.astimezone(timezone.utc)
 
 
 def clean_text(text):
-    # the EASyPLUS only takes printable ASCII. accents get stripped (é -> e),
-    # commas become dashes like the original plugin did, anything else becomes a space
-    out = []
-    for c in unicodedata.normalize('NFKD', str(text)):
-        if unicodedata.combining(c):
+    # Keep the appliance's printable ASCII and comma handling.
+    chars = []
+    for char in unicodedata.normalize('NFKD', str(text)):
+        if unicodedata.combining(char):
             continue
-        if c == ',':
-            out.append('-')
-        elif 32 <= ord(c) <= 126:
-            out.append(c)
+        if char == ',':
+            chars.append('-')
+        elif ' ' <= char <= '~':
+            chars.append(char)
         else:
-            out.append(' ')
-    return ''.join(out)
+            chars.append(' ')
+    return ''.join(chars)
 
 
 def same_duration(sent, expires):
@@ -62,12 +60,13 @@ def get_lang(code):
 def parse_cap(raw):
     if isinstance(raw, str):
         raw = raw.encode('utf-8')
-    # refuse DTDs so nobody can feed us an entity bomb
-    if b'<!DOCTYPE' in raw.upper() or b'<!ENTITY' in raw.upper():
+    # Reject DTDs and entity declarations before parsing the feed.
+    upper_xml = raw.upper()
+    if b'<!DOCTYPE' in upper_xml or b'<!ENTITY' in upper_xml:
         raise ValueError('CAP XML must not contain a DTD or entity declarations')
 
     root = ET.fromstring(raw)
-    if root.tag not in ['{%s}alert' % ns for ns in CAP_NAMESPACES]:
+    if root.tag not in [f'{{{namespace}}}alert' for namespace in CAP_NAMESPACES]:
         raise ValueError('Expected a CAP 1.1 or 1.2 alert element')
     ns = {'c': root.tag[1:].split('}')[0]}
 
@@ -78,35 +77,37 @@ def parse_cap(raw):
         return el.findall('c:' + tag, ns)
 
     def values(el, tag, name):
-        # every <value> under <tag> with a matching <valueName> (some, like BLOCKCHANNEL, repeat)
-        return [text(p, 'value') for p in findall(el, tag) if text(p, 'valueName') == name]
+        return [text(node, 'value') for node in findall(el, tag) if text(node, 'valueName') == name]
 
     msg_type = text(root, 'msgType')
     if msg_type not in ('Alert', 'Update'):
         raise NotDeliverable(f'Only CAP Alert and Update messages can be delivered (got {msg_type or "none"!r})')
 
-    # CAP says a missing <language> means en-US
-    infos = findall(root, 'info')
-    english = next((i for i in infos if get_lang(text(i, 'language', 'en-US')) == 'en-us'), None)
+    english = None
+    languages = {}
+    for info in findall(root, 'info'):
+        lang = get_lang(text(info, 'language', 'en-US'))
+        if not lang or lang in languages:
+            continue
+        if lang == 'en-us':
+            english = info
+
+        parts = [text(info, tag) for tag in ('headline', 'description', 'instruction')]
+        languages[lang] = {
+            'alert_text': ' '.join(part for part in parts if part),
+            'audio': get_audio_resources(info, text, findall),
+        }
     if english is None:
         raise ValueError('CAP needs an English info block for SAME metadata')
 
     locations = []
     areas = []
     for area in findall(english, 'area'):
-        if text(area, 'areaDesc'):
-            areas.append(text(area, 'areaDesc'))
-        for geocode in findall(area, 'geocode'):
-            if text(geocode, 'valueName') == 'SAME':
-                locations.extend(text(geocode, 'value').split())
-
-    languages = {}
-    for info in infos:
-        lang = get_lang(text(info, 'language', 'en-US'))
-        if not lang or lang in languages:
-            continue
-        parts = [text(info, 'headline'), text(info, 'description'), text(info, 'instruction')]
-        languages[lang] = {'alert_text': ' '.join(p for p in parts if p), 'audio': get_audio_resources(info, text, findall)}
+        area_desc = text(area, 'areaDesc')
+        if area_desc:
+            areas.append(area_desc)
+        for same in values(area, 'geocode', 'SAME'):
+            locations.extend(same.split())
 
     return {
         'identifier': text(root, 'identifier'),
@@ -127,16 +128,19 @@ def parse_cap(raw):
 
 
 def get_audio_resources(info, text, findall):
-    # IPAWS attaches broadcast audio as a <resource>, either base64'd in <derefUri> or linked in <uri>.
-    # skip streaming audio (that's for EAN), and put "EAS Broadcast Content" first
-    found = []
-    for res in findall(info, 'resource'):
-        mime = text(res, 'mimeType').lower()
-        if mime.startswith('audio/') and 'stream' not in mime:
-            found.append({'desc': text(res, 'resourceDesc'), 'mime': mime,
-                          'uri': text(res, 'uri'), 'deref': text(res, 'derefUri')})
-    found.sort(key=lambda r: r['desc'].lower() != 'eas broadcast content')
-    return found
+    resources = []
+    for resource in findall(info, 'resource'):
+        mime = text(resource, 'mimeType').lower()
+        if not mime.startswith('audio/') or 'stream' in mime:
+            continue
+        resources.append({
+            'desc': text(resource, 'resourceDesc'),
+            'mime': mime,
+            'uri': text(resource, 'uri'),
+            'deref': text(resource, 'derefUri'),
+        })
+    resources.sort(key=lambda resource: resource['desc'].lower() != 'eas broadcast content')
+    return resources
 
 
 def load_cap(path):
@@ -170,8 +174,9 @@ def prepare_alert(data, call_sign='CAP', audio_en=None, audio_es=None, must_carr
         raise ValueError('Source label must be 1..8 printable ASCII characters without - or +')
 
     # station ID is left blank (8 spaces), the encoder fills in its own
-    header = (f'ZCZC-{org}-{event}-' + '-'.join(locations)
-              + f'+{same_duration(sent, expires)}-{sent.strftime("%j%H%M")}-        -')
+    same_locations = '-'.join(locations)
+    duration = same_duration(sent, expires)
+    header = f'ZCZC-{org}-{event}-{same_locations}+{duration}-{sent:%j%H%M}-        -'
 
     langs = data.get('languages', {})
     if must_carry is None:
