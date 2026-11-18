@@ -32,7 +32,11 @@ Edit the JSON files in the project folder. Use `--config-dir path/to/config` to 
 ```
 
 - `callsign` is the source label shown on the encoder. Use 1–8 printable ASCII characters, excluding `+` and `-`. It defaults to `CAP`.
-- Set `tts` to `"gtts"` to generate audio when IPAWS audio is missing or unusable. Use `false` to turn it off. This file is optional.
+- Set `tts` to generate audio when IPAWS audio is missing or unusable. Use `false` to turn it off. This file is optional.
+
+Supported TTS engines currently:
+- gtts | Google TTS api through the python library
+- sagedigital | Generates a SAGE Digital log string just for TTS, and synthesizes with real Loquendo Dave TTS from the SAGE Digital ENDEC. Requires "ENDEC_Dave" from https://github.com/wagwan-piffting-blud/. Place the binary in the root of the project.
 
 ### `sources.json`
 
@@ -43,6 +47,7 @@ Edit the JSON files in the project folder. Use `--config-dir path/to/config` to 
             "IPAWS": {
                 "enabled": true,
                 "poll_dur": 15,
+                "pin": "xxxx", #optional
                 "url": "https://apps.fema.gov/IPAWSOPEN_EAS_SERVICE/rest/feed"
             }
         }
@@ -50,7 +55,7 @@ Edit the JSON files in the project folder. Use `--config-dir path/to/config` to 
 }
 ```
 
-Each entry under `sources.ipaws` needs a feed `url`. Set `poll_dur` to the time between polls in seconds (default 60). Set `enabled` to `false` to skip a feed. Keep at least one feed enabled.
+Each entry under `sources.ipaws` needs a feed `url`. Set `poll_dur` to the time between polls in seconds (default 60). If your server requires a pin, set it; if not, don't keep the entry in the config. Set `enabled` to `false` to skip a feed. Keep at least one feed enabled.
 
 ### `encoders.json`
 
@@ -86,3 +91,7 @@ python main.py --dry-run
 Dry run polls your feeds and logs what it would send without contacting the encoders. To start sending alerts, run `python main.py`. Press Ctrl+C to stop.
 
 See [the docs](docs/README.md) for more on alert filtering, audio, and the encoder protocol.
+
+## Attributions
+
+Thank you to Wags (https://github.com/wagwan-piffting-blud/) for developing and maintaining EAS2Text-NextGen, which has been packaged with this project, as well as ENDEC-Dave which now has support in this project.

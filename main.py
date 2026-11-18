@@ -7,6 +7,7 @@ import os
 import shutil
 import sys
 import threading
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -134,14 +135,21 @@ class Relay:
 
         if not targets:
             return
-        audio = self.get_audio(alert, self.source_openers.get(source))
-        for name, encoder in targets:
-            self.send(name, encoder, alert, audio)
+        try:
+            prepared = prepare_alert(alert, self.callsign)
+        except (ValueError, KeyError) as error:
+            log.error(f'{source}: Cannot build alert: {error}')
+            return
 
-    def get_audio(self, alert, open_request=None):
+        audio = self.get_audio(alert, self.source_openers.get(source), zczc=prepared.fsk_header)
+        prepared = replace(prepared, audio_en=audio.get('en-us'), audio_es=audio.get('es-us'))
+        for name, encoder in targets:
+            self.send(name, encoder, prepared, alert['event_code'])
+
+    def get_audio(self, alert, open_request=None, *, zczc=None):
         audio = {}
         for lang, info in alert.get('languages', {}).items():
-            audio[lang] = self.ipaws_audio(lang, info, open_request) or self.tts_audio(lang, info)
+            audio[lang] = self.ipaws_audio(lang, info, open_request) or self.tts_audio(lang, info, zczc=zczc)
         return audio
 
     def ipaws_audio(self, lang, info, open_request=None):
@@ -155,9 +163,9 @@ class Relay:
             return audio
         return None
 
-    def tts_audio(self, lang, info):
+    def tts_audio(self, lang, info, *, zczc=None):
         try:
-            audio = tts_man.synthesize(info.get('alert_text', ''), lang, self.config_path)
+            audio = tts_man.synthesize(info.get('alert_text', ''), lang, self.config_path, zczc=zczc)
         except tts_man.TTSError as error:
             log.warning(f'TTS ({lang}) failed: {error}, sending without audio')
             return None
@@ -165,15 +173,9 @@ class Relay:
             log.info(f'Generated TTS audio ({lang}, {seconds(audio):.1f}s)')
         return audio
 
-    def send(self, name, encoder, alert_data, audio):
+    def send(self, name, encoder, alert, event_code):
         encoder_log = logging.getLogger(name)
-        try:
-            alert = prepare_alert(alert_data, self.callsign, audio.get('en-us'), audio.get('es-us'))
-        except (ValueError, KeyError) as error:
-            encoder_log.error(f'Cannot build alert: {error}')
-            return
-
-        langs = ', '.join(lang for lang, a in audio.items() if a) or 'none'
+        langs = ', '.join(lang for lang, audio in (('en-us', alert.audio_en), ('es-us', alert.audio_es)) if audio) or 'none'
         if self.dry_run:
             encoder_log.info(f'[dry run] would send {alert.fsk_header} (audio: {langs})')
             return
@@ -191,7 +193,7 @@ class Relay:
             # A retry could air the alert twice if the encoder already accepted it.
             encoder_log.error(f'Delivery failed: {error}')
             return
-        encoder_log.info(f'Encoder accepted {alert_data["event_code"]}')
+        encoder_log.info(f'Encoder accepted {event_code}')
 
 
 def main():

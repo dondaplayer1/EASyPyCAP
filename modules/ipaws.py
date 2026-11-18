@@ -28,6 +28,12 @@ class PinOpener(urllib.request.HTTPRedirectHandler):
 
     def request_url(self, url):
         parts = urllib.parse.urlsplit(url)
+        scheme, hostname, port = server_origin(parts)
+        if (scheme, port) == ('http', 80) and self.origin == ('https', hostname, 443):
+            # Some HTTPS feeds still publish HTTP links for their CAP and audio.
+            netloc = parts.netloc.rsplit(':', 1)[0] if parts.port is not None else parts.netloc
+            parts = parts._replace(scheme='https', netloc=netloc)
+
         same_server = server_origin(parts) == self.origin
         query = []
         for param in parts.query.split('&') if parts.query else []:
