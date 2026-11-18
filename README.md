@@ -73,7 +73,7 @@ Each entry under `sources.ipaws` needs a feed `url`. Set `poll_dur` to the time 
 - Replace the example IP and password with your encoder's settings. Set `enabled` to `true` to use the entry. The default TCP ports are `59911` for commands and `59919` for audio.
 - Use six-digit SAME codes in `counties` and three-character SAME event codes in `events`. Keep county codes in quotes to preserve leading zeros. An alert must match both lists. Each list defaults to `["*"]`, which accepts all values for that filter.
 
-###On Your EASy
+### On Your EASy
 
 Open the configuration utility, navigate to General > EAS Settings and enable "Enable CAP Alerts". This requires the IPAWSCAP license, and the EASyNIC card. This has only been tested on software version 8.09.
 
