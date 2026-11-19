@@ -48,6 +48,7 @@ Supported TTS engines currently:
                 "enabled": true,
                 "poll_dur": 15,
                 "pin": "xxxx", #optional
+                "verify_ssl": true, #optional
                 "url": "https://apps.fema.gov/IPAWSOPEN_EAS_SERVICE/rest/feed"
             }
         }
@@ -55,7 +56,7 @@ Supported TTS engines currently:
 }
 ```
 
-Each entry under `sources.ipaws` needs a feed `url`. Set `poll_dur` to the time between polls in seconds (default 60). If your server requires a pin, set it; if not, don't keep the entry in the config. Set `enabled` to `false` to skip a feed. Keep at least one feed enabled.
+Each entry under `sources.ipaws` needs a feed `url`. Set `poll_dur` to the time between polls in seconds (default 60). If your server requires a pin, set it; if not, don't keep the entry in the config. Set `verify_ssl` to `false` to skip SSL certificate checks for a feed whose server has a self-signed or incomplete certificate chain (this also applies to its CAP and audio downloads); leave it out otherwise. Set `enabled` to `false` to skip a feed. Keep at least one feed enabled.
 
 ### `encoders.json`
 

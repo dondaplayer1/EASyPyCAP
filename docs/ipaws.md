@@ -3,7 +3,7 @@
 This module polls one IPAWS-OPEN EAS feed. Each feed runs as its own thread.
 
 ```python
-IpawsPoller(name, url, interval, on_alert, stop_event, timeout=15, skip_existing=True)
+IpawsPoller(name, url, interval, on_alert, stop_event, timeout=15, skip_existing=True, *, pin=None, verify_ssl=True)
 ```
 
 | Argument | Meaning |
@@ -15,6 +15,8 @@ IpawsPoller(name, url, interval, on_alert, stop_event, timeout=15, skip_existing
 | `stop_event` | A `threading.Event`. Set it to stop the thread. |
 | `timeout` | HTTP timeout in seconds. |
 | `skip_existing` | If true, alerts already in the feed when the thread starts are ignored, so a restart doesn't air them again. |
+| `pin` | Optional PIN, added as a `pin` query parameter to requests to the feed's server. |
+| `verify_ssl` | If false, SSL certificates aren't checked for the feed, CAP or audio downloads. |
 
 ## The feed
 

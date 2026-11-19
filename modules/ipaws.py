@@ -1,5 +1,6 @@
 """Poll an IPAWS-OPEN EAS feed for new alerts."""
 import logging
+import ssl
 import threading
 import urllib.error
 import urllib.parse
@@ -19,12 +20,20 @@ def server_origin(parts):
     return parts.scheme, parts.hostname, port
 
 
+def insecure_ssl_context():
+    """An SSL context that skips certificate and hostname checks."""
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
 class PinOpener(urllib.request.HTTPRedirectHandler):
-    def __init__(self, url, pin):
+    def __init__(self, url, pin, handlers=()):
         self.origin = server_origin(urllib.parse.urlsplit(url))
         self.pin = str(pin)
         self.pin_query = urllib.parse.urlencode({'pin': self.pin})
-        self.opener = urllib.request.build_opener(self)
+        self.opener = urllib.request.build_opener(self, *handlers)
 
     def request_url(self, url):
         parts = urllib.parse.urlsplit(url)
@@ -56,7 +65,8 @@ class PinOpener(urllib.request.HTTPRedirectHandler):
 
 
 class IpawsPoller(threading.Thread):
-    def __init__(self, name, url, interval, on_alert, stop_event, timeout=15, skip_existing=True, *, pin=None):
+    def __init__(self, name, url, interval, on_alert, stop_event, timeout=15, skip_existing=True, *, pin=None,
+                 verify_ssl=True):
         super().__init__(name=name, daemon=True)
         self.url = url
         self.interval = float(interval)
@@ -64,14 +74,25 @@ class IpawsPoller(threading.Thread):
         self.stop_event = stop_event
         self.timeout = timeout
         self.skip_existing = skip_existing
-        self.pin_opener = PinOpener(url, pin) if pin else None
         self.seen = set()
         self.log = logging.getLogger(name)
+
+        handlers = []
+        if not verify_ssl:
+            self.log.warning('SSL certificate checking is disabled for this source')
+            handlers.append(urllib.request.HTTPSHandler(context=insecure_ssl_context()))
+        # Used for the feed, CAP files and audio; None means plain urlopen.
+        if pin:
+            self.open_request = PinOpener(url, pin, handlers).open
+        elif handlers:
+            self.open_request = urllib.request.build_opener(*handlers).open
+        else:
+            self.open_request = None
 
     def fetch(self, url):
         url = urllib.parse.urljoin(self.url, url)
         request = urllib.request.Request(url, headers={'User-Agent': 'EASyPyCAP'})
-        open_request = self.pin_opener.open if self.pin_opener else urllib.request.urlopen
+        open_request = self.open_request or urllib.request.urlopen
         with open_request(request, timeout=self.timeout) as response:
             return response.read()
 

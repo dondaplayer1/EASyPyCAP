@@ -225,10 +225,10 @@ def main():
         if source.get('enabled', True):
             poller = IpawsPoller(
                 name, source['url'], source.get('poll_dur', 60), relay.on_alert, stop_event,
-                pin=source.get('pin'),
+                pin=source.get('pin'), verify_ssl=source.get('verify_ssl', True),
             )
-            if poller.pin_opener:
-                relay.source_openers[name] = poller.pin_opener.open
+            if poller.open_request:
+                relay.source_openers[name] = poller.open_request
             pollers.append(poller)
     if not pollers:
         log.error('No enabled sources in sources.json')
